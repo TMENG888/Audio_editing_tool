@@ -1,0 +1,750 @@
+<!DOCTYPE html>
+<!--
+  音频剪辑工具（纯本地，双击用浏览器打开即可）
+  - 把 m4a / mp3 / wav / flac / ogg 等音频拖进窗口（或点“打开文件”）
+  - 播放时拖动波形可快进/快退，滚轮缩放波形
+  - 在播放头处按 I 设起点、O 设终点（也可拖动蓝色选区边缘）
+  - 点“导出”：WAV 无损（离线可用）；M4A 首次导出需联网自动下载编码器
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>音频剪辑工具</title>
+<style>
+  :root{
+    --bg:#0b0d12; --panel:#141824; --line:#262d40; --txt:#e8ecf5; --dim:#8b94ab;
+    --acc:#4f8cff; --acc2:#7cc4ff; --danger:#ff6b6b;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{margin:0;background:var(--bg);color:var(--txt);font:14px/1.5 "Segoe UI",system-ui,"Microsoft YaHei",sans-serif;display:flex;flex-direction:column;overflow:hidden}
+  header{display:flex;align-items:center;gap:12px;padding:10px 16px;background:linear-gradient(90deg,#151b2c,#101522);border-bottom:1px solid var(--line)}
+  header h1{font-size:16px;margin:0;font-weight:600}
+  header .sub{color:var(--dim);font-size:12px}
+  main{flex:1;display:flex;min-height:0}
+  aside{width:250px;border-right:1px solid var(--line);display:flex;flex-direction:column;background:var(--panel);min-height:0}
+  .list-head{display:flex;gap:8px;align-items:center;padding:10px 12px;border-bottom:1px solid var(--line)}
+  #fileList{flex:1;overflow:auto;margin:0;padding:6px;list-style:none}
+  #fileList li{padding:8px 10px;border-radius:8px;cursor:pointer;user-select:none}
+  #fileList li:hover{background:#1d2436}
+  #fileList li.active{background:#243050;outline:1px solid #3a4c7d}
+  #fileList .fname{font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  #fileList .fmeta{font-size:11.5px;color:var(--dim)}
+  .editor{flex:1;display:flex;flex-direction:column;gap:10px;padding:12px;min-width:0;min-height:0}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:10px}
+  .file-row{display:flex;align-items:center;gap:10px;padding:8px 12px}
+  #curName{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  #curDur{color:var(--dim);font-size:12px;white-space:nowrap}
+  .wave-wrap{position:relative;height:64px;overflow:hidden;user-select:none;-webkit-user-select:none}
+  .wave-wrap.main{height:250px}
+  canvas{display:block;width:100%;height:100%}
+  .wave-wrap.main canvas{cursor:crosshair}
+  #playhead{position:absolute;top:0;bottom:0;width:2px;background:var(--danger);display:none;pointer-events:none;z-index:6}
+  #playhead.show{display:block}
+  #playhead::before{content:'';position:absolute;top:0;left:-4px;border:5px solid transparent;border-top:6px solid var(--danger)}
+  .sel-region{position:absolute;top:20px;bottom:0;background:rgba(79,140,255,.15);border-left:2px solid var(--acc);border-right:2px solid var(--acc);display:none;cursor:grab;z-index:5}
+  .sel-region.show{display:block}
+  .sel-region.dragging{cursor:grabbing}
+  .sel-edge{position:absolute;top:0;bottom:0;width:12px;cursor:ew-resize}
+  .sel-edge.left{left:-7px}.sel-edge.right{right:-7px}
+  .sel-tag{position:absolute;top:3px;font-size:11px;background:rgba(9,12,20,.88);border:1px solid var(--acc);color:#cfe0ff;padding:0 6px;border-radius:6px;white-space:nowrap;pointer-events:none}
+  .sel-edge.left .sel-tag{left:2px}
+  .sel-edge.right .sel-tag{right:2px}
+  .controls{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:10px 12px;user-select:none;-webkit-user-select:none}
+  .btn{background:#222b41;border:1px solid #31405f;color:var(--txt);padding:6px 12px;border-radius:8px;cursor:pointer;font-size:13px}
+  .btn:hover{background:#2a3552}
+  .btn:disabled{opacity:.4;cursor:not-allowed}
+  .btn.primary{background:var(--acc);border-color:var(--acc);color:#fff}
+  .btn.primary:hover{background:#3f7ef0}
+  .btn.icon{padding:6px 9px}
+  select{background:#1a2133;color:var(--txt);border:1px solid #31405f;border-radius:8px;padding:5px 8px;font-size:13px}
+  select:disabled{opacity:.4}
+  input[type=range]{accent-color:var(--acc)}
+  label.chk{display:flex;gap:5px;align-items:center;color:var(--dim);font-size:13px;cursor:pointer}
+  .time{font-variant-numeric:tabular-nums;color:var(--acc2);font-size:15px;min-width:140px}
+  .lbl{color:var(--dim);font-size:12.5px}
+  .sel-info{color:var(--dim);font-size:12.5px;padding:0 12px 10px}
+  .export-row{padding:10px 12px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  #expStatus{font-size:12.5px;color:var(--dim);flex:1;min-width:200px}
+  #expStatus.err{color:var(--danger)}
+  footer{padding:6px 16px;color:#6b7490;font-size:12px;border-top:1px solid var(--line)}
+  #dropOverlay{position:fixed;inset:0;background:rgba(10,14,24,.85);display:none;align-items:center;justify-content:center;z-index:99;font-size:22px;color:var(--acc2);border:3px dashed var(--acc);margin:8px;border-radius:14px}
+</style>
+</head>
+<body>
+<header>
+  <h1>🎙️ 音频剪辑工具</h1>
+  <span class="sub">纯本地运行 · 音频不会上传 · 支持 m4a / mp3 / wav / flac / ogg</span>
+</header>
+
+<main>
+  <aside>
+    <div class="list-head">
+      <button class="btn primary" id="btnOpen">📂 打开文件</button>
+      <input type="file" id="fileInput" multiple accept="audio/*,.m4a,.mp3,.wav,.aac,.flac,.ogg,.mp4" hidden>
+    </div>
+    <ul id="fileList"></ul>
+  </aside>
+
+  <section class="editor">
+    <div class="panel file-row">
+      <span id="curName">未加载音频</span>
+      <span id="curDur"></span>
+    </div>
+
+    <div class="panel wave-wrap" id="ovWrap"><canvas id="ovCv"></canvas></div>
+
+    <div class="panel wave-wrap main" id="waveWrap">
+      <canvas id="waveCv"></canvas>
+      <div class="sel-region" id="selRegion">
+        <div class="sel-edge left" id="edgeL"><span class="sel-tag" id="tagL"></span></div>
+        <div class="sel-edge right" id="edgeR"><span class="sel-tag" id="tagR"></span></div>
+      </div>
+      <div id="playhead"></div>
+    </div>
+
+    <div class="panel">
+      <div class="controls">
+        <button class="btn primary" id="btnPlay" disabled>▶ 播放</button>
+        <button class="btn" id="btnStop" disabled>⏹ 回到开头</button>
+        <span class="time" id="timeLabel">0:00.0 / 0:00.0</span>
+        <label class="chk"><input type="checkbox" id="chkLoop">循环选区 (L)</label>
+        <span class="lbl">速度</span>
+        <select id="rateSel">
+          <option value="0.5">0.5×</option><option value="0.75">0.75×</option>
+          <option value="1" selected>1×</option><option value="1.25">1.25×</option>
+          <option value="1.5">1.5×</option><option value="2">2×</option>
+        </select>
+        <span class="lbl">🔊</span>
+        <input type="range" id="volRange" min="0" max="100" value="100" style="width:90px">
+        <span style="flex:1"></span>
+        <button class="btn icon" id="btnZoomOut" title="缩小">🔍−</button>
+        <button class="btn icon" id="btnZoomIn" title="放大">🔍+</button>
+        <button class="btn icon" id="btnFit" title="适应全览">⤢ 全览</button>
+      </div>
+      <div class="controls" style="padding-top:0">
+        <button class="btn" id="btnStart" disabled>⇤ 设起点 (I)</button>
+        <button class="btn" id="btnEnd" disabled>设终点 (O) ⇥</button>
+        <button class="btn" id="btnSelPlay" disabled>▶ 试听选中</button>
+        <button class="btn" id="btnAll" disabled>全选</button>
+        <button class="btn" id="btnSelClear" disabled>清除选择 (Del)</button>
+      </div>
+      <div class="sel-info" id="selInfo">未选择：拖动波形上的蓝色选区，或在播放头处按 I / O 标记起点 / 终点</div>
+    </div>
+
+    <div class="panel export-row">
+      <span class="lbl">导出范围</span>
+      <select id="expRange"><option value="sel">选中区域</option><option value="full">整个文件</option></select>
+      <span class="lbl">格式</span>
+      <select id="expFormat"><option value="m4a">M4A (AAC)</option><option value="wav">WAV (无损)</option></select>
+      <span class="lbl" id="bitrateLabel">码率</span>
+      <select id="expBitrate">
+        <option>32k</option><option>48k</option><option selected>64k</option>
+        <option>96k</option><option>128k</option><option>192k</option>
+      </select>
+      <button class="btn primary" id="btnExport" disabled>⬇ 导出</button>
+      <span id="expStatus">就绪</span>
+    </div>
+  </section>
+</main>
+
+<footer>快捷键：空格 播放/暂停 · I 设起点 · O 设终点 · ← / → 快退/快进 5 秒（Shift 15秒）· Home/End 开头/结尾 · L 循环 · Delete 清除 · 滚轮缩放波形 · 拖动选区中间可整体移动</footer>
+<div id="dropOverlay">松开鼠标，导入音频文件 🎵</div>
+
+<script>
+'use strict';
+const $=id=>document.getElementById(id);
+const clamp=(v,a,b)=>v<a?a:v>b?b:v;
+
+const ovWrap=$('ovWrap'), ovCv=$('ovCv'), waveWrap=$('waveWrap'), waveCv=$('waveCv');
+const playhead=$('playhead'), selRegion=$('selRegion'), edgeL=$('edgeL'), edgeR=$('edgeR');
+const tagL=$('tagL'), tagR=$('tagR'), selInfo=$('selInfo'), timeLabel=$('timeLabel');
+const btnPlay=$('btnPlay'), btnStop=$('btnStop'), chkLoop=$('chkLoop'), rateSel=$('rateSel'), volRange=$('volRange');
+const btnStart=$('btnStart'), btnEnd=$('btnEnd'), btnSelPlay=$('btnSelPlay'), btnAll=$('btnAll'), btnSelClear=$('btnSelClear');
+const btnZoomIn=$('btnZoomIn'), btnZoomOut=$('btnZoomOut'), btnFit=$('btnFit');
+const expRange=$('expRange'), expFormat=$('expFormat'), expBitrate=$('expBitrate'), bitrateLabel=$('bitrateLabel');
+const btnExport=$('btnExport'), expStatus=$('expStatus'), fileListEl=$('fileList');
+const curNameEl=$('curName'), curDurEl=$('curDur'), dropOverlay=$('dropOverlay');
+
+const RULER_H=20;
+
+// ---------- 全局状态 ----------
+let files=[];          // {file,name,buffer,dur,sr,len,chs,peaks,sel,offset,viewStart,pxPerSec}
+let cur=null;
+let audioCtx=null, gainNode=null;
+let srcNode=null, playing=false, mode='normal', loop=false, rate=1;
+let startCtxTime=0, playStartOffset=0, pausedOffset=0;
+let viewStart=0, pxPerSec=100;
+let busy=false;
+
+// ---------- 音频核心 ----------
+function getCtx(){
+  if(!audioCtx){
+    audioCtx=new (window.AudioContext||window.webkitAudioContext)();
+    gainNode=audioCtx.createGain();
+    gainNode.gain.value=volRange.value/100;
+    gainNode.connect(audioCtx.destination);
+  }
+  return audioCtx;
+}
+function stopSource(){
+  if(srcNode){ try{srcNode.onended=null;srcNode.stop();}catch(e){} try{srcNode.disconnect();}catch(e){} srcNode=null; }
+}
+function currentOffset(){
+  if(playing&&audioCtx) return playStartOffset+(audioCtx.currentTime-startCtxTime)*rate;
+  return pausedOffset;
+}
+function startSourceAt(t){
+  const c=getCtx();
+  if(c.state==='suspended') c.resume();
+  stopSource();
+  t=clamp(t,0,Math.max(0,cur.dur-0.005));
+  srcNode=c.createBufferSource();
+  srcNode.buffer=cur.buffer;
+  srcNode.playbackRate.value=rate;
+  srcNode.connect(gainNode||c.destination);
+  srcNode.onended=onNaturalEnd;
+  startCtxTime=c.currentTime; playStartOffset=t;
+  srcNode.start(0,t);
+  playing=true; pausedOffset=t;
+}
+function onNaturalEnd(){
+  if(!playing) return;
+  playing=false; srcNode=null;
+  const d=cur?cur.dur:0;
+  let t=currentOffset();
+  if(t>=d-0.1) t=(loop&&cur&&cur.sel)?cur.sel.start:d;
+  pausedOffset=Math.min(t,d);
+  updatePlayBtn();
+}
+function play(t, m){
+  if(!cur) return;
+  if(m) mode=m;
+  const c=getCtx(); if(c.state==='suspended') c.resume();
+  let t2=(t===undefined)?pausedOffset:t;
+  if(mode==='sel'&&cur.sel&&(t2<cur.sel.start||t2>=cur.sel.end)) t2=cur.sel.start;
+  if(t2>=cur.dur-0.01) t2=(mode==='sel'&&cur.sel)?cur.sel.start:0;
+  pausedOffset=t2;
+  startSourceAt(t2);
+  updatePlayBtn();
+}
+function pause(){
+  if(!playing) return;
+  const t=currentOffset();
+  stopSource(); playing=false;
+  pausedOffset=Math.min(t, cur?cur.dur:t);
+  updatePlayBtn();
+}
+function seekTo(t, user=true){
+  if(!cur) return;
+  t=clamp(t,0,cur.dur);
+  if(user&&mode==='sel') mode='normal';
+  if(playing) startSourceAt(t); else pausedOffset=t;
+  syncPlayhead();
+}
+function updatePlayBtn(){ btnPlay.textContent=playing?'⏸ 暂停':'▶ 播放'; }
+
+// ---------- 峰值数据 ----------
+function computePeaks(buffer){
+  const n=buffer.length;
+  if(!n) return null;
+  const n1=Math.ceil(n/256), n2=Math.ceil(n/16384);
+  const min1=new Float32Array(n1).fill(1e9), max1=new Float32Array(n1).fill(-1e9);
+  const min2=new Float32Array(n2).fill(1e9), max2=new Float32Array(n2).fill(-1e9);
+  const chs=[]; for(let c=0;c<buffer.numberOfChannels;c++) chs.push(buffer.getChannelData(c));
+  const nc=chs.length;
+  let i=0;
+  for(let b=0;b<n1;b++){
+    const e=Math.min(n,(b+1)*256);
+    let mn=1e9,mx=-1e9;
+    for(;i<e;i++){
+      let v=chs[0][i]; if(nc>1) v=(v+chs[1][i])*0.5;
+      if(v<mn)mn=v; if(v>mx)mx=v;
+    }
+    min1[b]=mn; max1[b]=mx;
+    const c=b>>6;
+    if(mn<min2[c])min2[c]=mn; if(mx>max2[c])max2[c]=mx;
+  }
+  return {min1,max1,n1,min2,max2,n2};
+}
+function rangeAt(f,i0,i1){
+  if(i1<=i0) return null;
+  const span=i1-i0;
+  let mn=1e9,mx=-1e9;
+  if(span<=300){                       // 放大很深时直接读原始采样
+    const a=f.chs, stereo=a.length>1;
+    for(let i=i0;i<i1;i++){
+      let v=a[0][i]; if(stereo) v=(v+a[1][i])*0.5;
+      if(v<mn)mn=v; if(v>mx)mx=v;
+    }
+  }else if(span>64*256){               // 缩得很小时用粗粒度峰值
+    const p=f.peaks, B=16384;
+    const c0=Math.max(0,(i0/B)|0), c1=Math.min(p.n2,Math.ceil(i1/B));
+    for(let c=c0;c<c1;c++){ if(p.min2[c]<mn)mn=p.min2[c]; if(p.max2[c]>mx)mx=p.max2[c]; }
+  }else{                               // 常规：256 采样/桶
+    const p=f.peaks, B=256;
+    const b0=Math.max(0,(i0/B)|0), b1=Math.min(p.n1,Math.ceil(i1/B));
+    for(let b=b0;b<b1;b++){ if(p.min1[b]<mn)mn=p.min1[b]; if(p.max1[b]>mx)mx=p.max1[b]; }
+  }
+  if(mn>mx) return null;
+  return [mn,mx];
+}
+
+// ---------- 绘制 ----------
+function fitCanvas(cv){
+  const dpr=window.devicePixelRatio||1;
+  const r=cv.getBoundingClientRect();
+  const w=Math.max(60,r.width), h=Math.max(30,r.height);
+  if(cv.width!==Math.round(w*dpr)||cv.height!==Math.round(h*dpr)){ cv.width=Math.round(w*dpr); cv.height=Math.round(h*dpr); }
+  const g=cv.getContext('2d');
+  g.setTransform(dpr,0,0,dpr,0,0);
+  return {g,w,h};
+}
+function pickStep(pps){
+  const steps=[0.1,0.2,0.5,1,2,5,10,15,30,60,120,300,600,1200,1800,3600];
+  for(const s of steps) if(s*pps>=70) return s;
+  return 3600;
+}
+function drawMain(){
+  const {g,w,h}=fitCanvas(waveCv);
+  g.clearRect(0,0,w,h);
+  g.fillStyle='#12151c'; g.fillRect(0,0,w,h);
+  if(!cur){
+    g.fillStyle='#5b6478'; g.font='14px system-ui'; g.textAlign='center';
+    g.fillText('把音频文件拖到这里，或点击左上角「打开文件」',w/2,h/2);
+    g.textAlign='left';
+    return;
+  }
+  const f=cur, pps=pxPerSec, t0=viewStart, t1=t0+w/pps;
+  // 时间尺
+  g.fillStyle='#0d1015'; g.fillRect(0,0,w,RULER_H);
+  g.fillStyle='rgba(255,255,255,.12)'; g.fillRect(0,RULER_H,w,1);
+  const step=pickStep(pps);
+  g.fillStyle='#7f8aa6'; g.font='11px Consolas,monospace';
+  for(let t=Math.ceil(t0/step)*step;t<=t1+1e-9;t+=step){
+    const x=Math.round((t-t0)*pps);
+    g.fillRect(x,RULER_H-6,1,6);
+    g.fillText(fmtTime(t,step<1),x+3,13);
+  }
+  // 波形
+  const mid=RULER_H+(h-RULER_H)/2, amp=(h-RULER_H)/2-6;
+  const sr=f.sr;
+  g.fillStyle='#5aa9ff';
+  for(let x=0;x<w;x++){
+    const ta=t0+x/pps;
+    let i0=Math.floor(ta*sr), i1=Math.max(i0+1,Math.ceil((ta+1/pps)*sr));
+    i0=clamp(i0,0,f.len); i1=Math.min(f.len,i1);
+    if(i0>=f.len) break;
+    const r=rangeAt(f,i0,i1); if(!r) continue;
+    const y1=mid-r[1]*amp, y2=mid-r[0]*amp;
+    g.fillRect(x,y1,1,Math.max(1,y2-y1));
+  }
+  g.fillStyle='rgba(255,255,255,.15)'; g.fillRect(0,mid,w,1);
+}
+function drawOverview(){
+  const {g,w,h}=fitCanvas(ovCv);
+  g.clearRect(0,0,w,h);
+  g.fillStyle='#12151c'; g.fillRect(0,0,w,h);
+  if(!cur){ g.fillStyle='#5b6478'; g.font='12px system-ui'; g.textAlign='center'; g.fillText('总览',w/2,h/2); g.textAlign='left'; return; }
+  const f=cur, mid=h/2, amp=h/2-4, sr=f.sr;
+  if(f.peaks){
+    g.fillStyle='#4a90e8';
+    for(let x=0;x<w;x++){
+      const i0=Math.floor(x/w*f.len), i1=Math.max(i0+1,Math.floor((x+1)/w*f.len));
+      const r=rangeAt(f,Math.max(0,i0),Math.min(f.len,i1)); if(!r) continue;
+      const y1=mid-r[1]*amp, y2=mid-r[0]*amp;
+      g.fillRect(x,y1,1,Math.max(1,y2-y1));
+    }
+  }
+  if(f.sel){
+    const x1=f.sel.start/f.dur*w, x2=f.sel.end/f.dur*w;
+    g.fillStyle='rgba(79,140,255,.28)'; g.fillRect(x1,0,Math.max(2,x2-x1),h);
+  }
+  // 当前视口
+  const vx=viewStart/f.dur*w, vw=(waveWrap.clientWidth/pxPerSec)/f.dur*w;
+  g.fillStyle='rgba(79,140,255,.12)'; g.fillRect(vx,0,Math.max(4,vw),h);
+  g.strokeStyle='#4f8cff'; g.lineWidth=1; g.strokeRect(vx+.5,.5,Math.max(4,vw)-1,h-1);
+}
+function syncRegion(){
+  const has=cur&&cur.sel&&(cur.sel.end-cur.sel.start)>0.001;
+  selRegion.classList.toggle('show',!!has);
+  if(!has){
+    selInfo.textContent='未选择：拖动波形上的蓝色选区，或在播放头处按 I / O 标记起点 / 终点';
+    return;
+  }
+  const s=cur.sel.start, e=cur.sel.end;
+  selRegion.style.left=((s-viewStart)*pxPerSec)+'px';
+  selRegion.style.width=Math.max(2,(e-viewStart)*pxPerSec-(s-viewStart)*pxPerSec)+'px';
+  tagL.textContent='起点 '+fmtTime(s);
+  tagR.textContent='终点 '+fmtTime(e);
+  selInfo.textContent='选中 '+fmtTime(s)+' → '+fmtTime(e)+'，时长 '+(e-s).toFixed(1)+' 秒';
+}
+function syncPlayhead(){
+  if(!cur){ playhead.classList.remove('show'); return; }
+  const t=currentOffset();
+  const x=(t-viewStart)*pxPerSec, w=waveWrap.clientWidth;
+  if(x<-4||x>w+4) playhead.classList.remove('show');
+  else{ playhead.classList.add('show'); playhead.style.left=x+'px'; }
+}
+function drawAll(){ drawOverview(); drawMain(); syncRegion(); syncPlayhead(); }
+
+// ---------- 视图控制 ----------
+function clampView(){
+  if(!cur) return;
+  const w=waveWrap.clientWidth||1, vd=w/pxPerSec;
+  if(vd>=cur.dur){ pxPerSec=w/cur.dur; viewStart=0; }
+  else viewStart=clamp(viewStart,0,cur.dur-vd);
+}
+function zoomAt(x,factor){
+  if(!cur) return;
+  const tAt=viewStart+x/pxPerSec;
+  const minPps=(waveWrap.clientWidth||1)/Math.max(cur.dur,0.001);
+  pxPerSec=clamp(pxPerSec*factor,minPps,8000);
+  viewStart=tAt-x/pxPerSec;
+  clampView(); drawAll();
+}
+function wheelHandler(e){
+  if(!cur) return; e.preventDefault();
+  const rect=waveWrap.getBoundingClientRect(), x=e.clientX-rect.left;
+  if(Math.abs(e.deltaX)>Math.abs(e.deltaY)||e.shiftKey){
+    viewStart+=(e.deltaX||e.deltaY)/pxPerSec; clampView(); drawAll(); return;
+  }
+  zoomAt(x,Math.exp(-e.deltaY*0.0018));
+}
+waveWrap.addEventListener('wheel',wheelHandler,{passive:false});
+ovWrap.addEventListener('wheel',wheelHandler,{passive:false});
+
+// ---------- 交互 ----------
+function xToTime(e){
+  const rect=waveCv.getBoundingClientRect();
+  return clamp(viewStart+(e.clientX-rect.left)/pxPerSec,0,cur?cur.dur:0);
+}
+let scrub=null;
+waveCv.addEventListener('pointerdown',e=>{
+  if(!cur) return; e.preventDefault();
+  scrub={was:playing};
+  if(playing) pause();
+  seekTo(xToTime(e),true);
+  waveCv.setPointerCapture(e.pointerId);
+});
+waveCv.addEventListener('pointermove',e=>{ if(scrub) seekTo(xToTime(e),true); });
+const endScrub=()=>{ if(scrub){ if(scrub.was) play(pausedOffset); scrub=null; } };
+waveCv.addEventListener('pointerup',endScrub);
+waveCv.addEventListener('pointercancel',endScrub);
+
+let ovDrag=false;
+function ovSeek(e){
+  const rect=ovCv.getBoundingClientRect();
+  const t=clamp((e.clientX-rect.left)/rect.width,0,1)*cur.dur;
+  const vd=waveWrap.clientWidth/pxPerSec;
+  viewStart=clamp(t-vd/2,0,Math.max(0,cur.dur-vd));
+  drawAll();
+}
+ovCv.addEventListener('pointerdown',e=>{ if(!cur) return; ovDrag=true; ovCv.setPointerCapture(e.pointerId); ovSeek(e); });
+ovCv.addEventListener('pointermove',e=>{ if(ovDrag&&cur) ovSeek(e); });
+ovCv.addEventListener('pointerup',()=>ovDrag=false);
+ovCv.addEventListener('pointercancel',()=>ovDrag=false);
+
+let regDrag=null;
+selRegion.addEventListener('pointerdown',e=>{
+  if(!cur||!cur.sel) return;
+  e.preventDefault(); e.stopPropagation();
+  const type=e.target===edgeL?'start':(e.target===edgeR?'end':null);
+  regDrag=type?{type}:{type:'move',grab:xToTime(e)-cur.sel.start};
+  selRegion.setPointerCapture(e.pointerId);
+  selRegion.classList.add('dragging');
+});
+selRegion.addEventListener('pointermove',e=>{
+  if(!regDrag||!cur||!cur.sel) return;
+  const t=xToTime(e), sel=cur.sel, dur=cur.dur;
+  if(regDrag.type==='move'){
+    const len=sel.end-sel.start;
+    const s=clamp(t-regDrag.grab,0,dur-len);
+    sel.start=s; sel.end=s+len;
+  }else if(regDrag.type==='start'){
+    sel.start=clamp(t,0,sel.end-0.01);
+  }else{
+    sel.end=clamp(t,sel.start+0.01,dur);
+  }
+  syncRegion(); drawOverview();
+});
+const endReg=()=>{ if(regDrag){ regDrag=null; selRegion.classList.remove('dragging'); } };
+selRegion.addEventListener('pointerup',endReg);
+selRegion.addEventListener('pointercancel',endReg);
+
+// ---------- 标记 ----------
+function setStart(){
+  if(!cur) return;
+  const t=currentOffset();
+  if(!cur.sel) cur.sel={start:t,end:t};
+  else{ cur.sel.start=t; if(cur.sel.end<t) cur.sel.end=t; }
+  drawAll();
+}
+function setEnd(){
+  if(!cur) return;
+  const t=currentOffset();
+  if(!cur.sel) cur.sel={start:t,end:t};
+  else{ cur.sel.end=t; if(cur.sel.start>t) cur.sel.start=t; }
+  drawAll();
+}
+
+// ---------- 文件加载 ----------
+function status(msg,isErr){ expStatus.textContent=msg; expStatus.classList.toggle('err',!!isErr); }
+async function handleFiles(list){
+  const arr=[...list].filter(f=>f&&f.size>0);
+  if(!arr.length) return;
+  for(const f of arr){
+    status('正在解码：'+f.name+' …');
+    try{
+      const ab=await f.arrayBuffer();
+      const buf=await getCtx().decodeAudioData(ab);
+      files.push({
+        file:f, name:f.name, buffer:buf, dur:buf.duration, sr:buf.sampleRate, len:buf.length,
+        chs:Array.from({length:buf.numberOfChannels},(_,c)=>buf.getChannelData(c)),
+        peaks:computePeaks(buf),
+        sel:null, offset:0, viewStart:0, pxPerSec:null
+      });
+      renderList();
+      if(!cur) switchTo(files.length-1);
+      drawAll();
+    }catch(err){
+      console.error(err);
+      status('无法解码 '+f.name+'（浏览器不支持该格式？）',true);
+    }
+  }
+  if(files.length) status('已加载 '+files.length+' 个文件');
+}
+function renderList(){
+  fileListEl.innerHTML='';
+  files.forEach((f,i)=>{
+    const li=document.createElement('li');
+    if(cur===f) li.className='active';
+    const d1=document.createElement('div'); d1.className='fname'; d1.textContent=(f.sel?'✂ ':'')+f.name;
+    const d2=document.createElement('div'); d2.className='fmeta';
+    d2.textContent=fmtTime(f.dur,false)+(f.sel?' · 已标记 '+fmtTime(f.sel.start)+'-'+fmtTime(f.sel.end):'');
+    li.appendChild(d1); li.appendChild(d2);
+    li.onclick=()=>switchTo(i);
+    fileListEl.appendChild(li);
+  });
+}
+function switchTo(i){
+  if(i<0||i>=files.length) return;
+  if(cur){ cur.offset=pausedOffset; cur.viewStart=viewStart; cur.pxPerSec=pxPerSec; }
+  stopSource(); playing=false;
+  cur=files[i];
+  pausedOffset=cur.offset||0; mode='normal';
+  viewStart=cur.viewStart||0;
+  pxPerSec=cur.pxPerSec||((waveWrap.clientWidth||900)/Math.max(cur.dur,0.001));
+  clampView();
+  curNameEl.textContent=cur.name;
+  curDurEl.textContent=fmtTime(cur.dur,false);
+  renderList(); updateUI(); drawAll();
+}
+function updateUI(){
+  const has=!!cur;
+  [btnPlay,btnStop,btnStart,btnEnd,btnSelPlay,btnAll,btnSelClear,btnZoomIn,btnZoomOut,btnFit,btnExport].forEach(b=>b.disabled=!has||b===btnExport&&busy);
+  expRange.disabled=expFormat.disabled=!has;
+  updatePlayBtn();
+}
+
+// ---------- 导出 ----------
+function fmtTag(t){
+  let m=Math.floor(t/60), s=Math.round(t-m*60);
+  if(s===60){m++;s=0;}
+  return (m?m+'m':'')+s+'s';
+}
+function bufferToWavBlob(f,t0,t1){
+  const buf=f.buffer, sr=buf.sampleRate;
+  const i0=Math.max(0,Math.floor(t0*sr)), i1=Math.min(buf.length,Math.ceil(t1*sr));
+  const n=Math.max(0,i1-i0), nc=Math.min(2,buf.numberOfChannels);
+  const dataBytes=n*nc*2, total=44+dataBytes;
+  if(total>800*1024*1024) throw new Error('导出内容过大（>800MB），请缩短选区或改用 M4A 格式');
+  const ab=new ArrayBuffer(total), dv=new DataView(ab);
+  const wstr=(o,s)=>{for(let i=0;i<s.length;i++)dv.setUint8(o+i,s.charCodeAt(i));};
+  wstr(0,'RIFF'); dv.setUint32(4,total-8,true); wstr(8,'WAVE'); wstr(12,'fmt ');
+  dv.setUint32(16,16,true); dv.setUint16(20,1,true); dv.setUint16(22,nc,true);
+  dv.setUint32(24,sr,true); dv.setUint32(28,sr*nc*2,true); dv.setUint16(32,nc*2,true); dv.setUint16(34,16,true);
+  wstr(36,'data'); dv.setUint32(40,dataBytes,true);
+  const chans=[]; for(let c=0;c<nc;c++) chans.push(buf.getChannelData(c));
+  let off=44;
+  for(let i=0;i<n;i++)for(let c=0;c<nc;c++){
+    let v=chans[c][i0+i]; v=v<-1?-1:v>1?1:v;
+    dv.setInt16(off,v<0?v*32768:v*32767,true); off+=2;
+  }
+  return new Blob([ab],{type:'audio/wav'});
+}
+function loadScript(src){
+  return new Promise((res,rej)=>{
+    const s=document.createElement('script');
+    s.src=src; s.onload=res; s.onerror=()=>rej(new Error('加载失败：'+src));
+    document.head.appendChild(s);
+  });
+}
+let ffmpegInst=null, ffLastLog='';
+async function ensureFFmpeg(){
+  if(ffmpegInst) return ffmpegInst;
+  status('正在加载 M4A 编码器（约 30MB，首次需要联网，之后有缓存）…');
+  await loadScript('https://unpkg.com/@ffmpeg/ffmpeg@0.12.10/dist/umd/ffmpeg.js');
+  await loadScript('https://unpkg.com/@ffmpeg/util@0.12.1/dist/umd/util.js');
+  const FFmpegCtor=window.FFmpegWASM&&window.FFmpegWASM.FFmpeg;
+  const toBlobURL=window.FFmpegUtil&&window.FFmpegUtil.toBlobURL;
+  if(!FFmpegCtor||!toBlobURL) throw new Error('编码器脚本加载失败，请检查网络');
+  const ff=new FFmpegCtor();
+  ff.on('progress',p=>{ if(p&&p.progress>0&&p.progress<=1) status('正在编码 M4A… '+Math.round(p.progress*100)+'%'); });
+  ff.on('log',m=>{ ffLastLog=m&&m.message||''; });
+  const CORE='https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd';
+  const cfg={
+    coreURL:await toBlobURL(CORE+'/ffmpeg-core.js','text/javascript'),
+    wasmURL:await toBlobURL(CORE+'/ffmpeg-core.wasm','application/wasm')
+  };
+  try{
+    const mainSrc=await(await fetch('https://unpkg.com/@ffmpeg/ffmpeg@0.12.10/dist/umd/ffmpeg.js')).text();
+    const m=mainSrc.match(/(\d+)\.ffmpeg\.js/);
+    cfg.classWorkerURL=await toBlobURL('https://unpkg.com/@ffmpeg/ffmpeg@0.12.10/dist/umd/'+(m?m[1]:'814')+'.ffmpeg.js','text/javascript');
+  }catch(e){ /* 某些环境下不需要 */ }
+  await ff.load(cfg);
+  ffmpegInst=ff;
+  return ff;
+}
+async function encodeM4a(wavBlob,kbps){
+  let ff;
+  try{ ff=await ensureFFmpeg(); }
+  catch(e){ throw new Error('M4A 编码器加载失败（需要联网）。可改用 WAV 格式导出。'+(e.message?'（'+e.message+'）':'')); }
+  status('正在写入音频数据…');
+  await ff.writeFile('in.wav',new Uint8Array(await wavBlob.arrayBuffer()));
+  status('正在编码 M4A…');
+  const rc=await ff.exec(['-i','in.wav','-c:a','aac','-b:a',kbps,'-movflags','+faststart','out.m4a']);
+  if(rc!==0) throw new Error('M4A 编码失败 '+(ffLastLog?'| '+ffLastLog:''));
+  const out=await ff.readFile('out.m4a');
+  try{ await ff.deleteFile('in.wav'); await ff.deleteFile('out.m4a'); }catch(e){}
+  return new Blob([out],{type:'audio/mp4'});
+}
+function saveBlob(blob,name){
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(blob); a.download=name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=>URL.revokeObjectURL(a.href),5000);
+}
+async function doExport(){
+  if(!cur||busy) return;
+  const f=cur;
+  const useSel=expRange.value==='sel';
+  if(useSel&&!f.sel){ status('请先用 I / O 设置要保留的起止点',true); return; }
+  const s=useSel?f.sel.start:0, e=useSel?f.sel.end:f.dur;
+  if(e-s<0.01){ status('选区太短',true); return; }
+  const fmt=expFormat.value;
+  busy=true; btnExport.disabled=true;
+  try{
+    let blob,ext;
+    if(fmt==='m4a'&&!useSel&&f.file){
+      blob=f.file; ext='m4a';       // 整文件且未剪辑：直接复制原文件，零损失
+    }else if(fmt==='wav'){
+      status('正在生成 WAV…');
+      blob=bufferToWavBlob(f,s,e); ext='wav';
+    }else{
+      status('正在生成中间 WAV…');
+      const wav=bufferToWavBlob(f,s,e);
+      blob=await encodeM4a(wav,expBitrate.value); ext='m4a';
+    }
+    const base=f.name.replace(/\.[^.]+$/,'').replace(/[\\/:*?"<>|]/g,'_');
+    const name=base+(useSel?'_剪辑_'+fmtTag(s)+'-'+fmtTag(e):'')+'.'+ext;
+    saveBlob(blob,name);
+    status('✅ 已导出：'+name);
+  }catch(err){
+    console.error(err);
+    status('导出失败：'+(err&&err.message||err),true);
+  }
+  busy=false; if(cur) btnExport.disabled=false;
+}
+
+// ---------- 控件事件 ----------
+btnOpen.onclick=()=>$('fileInput').click();
+$('fileInput').onchange=e=>{ handleFiles(e.target.files); e.target.value=''; };
+btnPlay.onclick=()=>playing?pause():play();
+btnStop.onclick=()=>{ pause(); seekTo(0); };
+chkLoop.onchange=()=>loop=chkLoop.checked;
+rateSel.onchange=()=>{
+  const wasP=playing, t=currentOffset();
+  if(wasP){ stopSource(); playing=false; }
+  rate=parseFloat(rateSel.value); pausedOffset=t;
+  if(wasP&&cur) startSourceAt(t);
+};
+volRange.oninput=()=>{ if(gainNode) gainNode.gain.value=volRange.value/100; };
+btnStart.onclick=setStart;
+btnEnd.onclick=setEnd;
+btnSelClear.onclick=()=>{ if(cur){ cur.sel=null; drawAll(); } };
+btnAll.onclick=()=>{ if(cur){ cur.sel={start:0,end:cur.dur}; drawAll(); } };
+btnSelPlay.onclick=()=>{ if(cur&&cur.sel) play(cur.sel.start,'sel'); };
+btnZoomIn.onclick=()=>zoomAt(waveWrap.clientWidth/2,1.5);
+btnZoomOut.onclick=()=>zoomAt(waveWrap.clientWidth/2,1/1.5);
+btnFit.onclick=()=>{ if(cur){ pxPerSec=waveWrap.clientWidth/cur.dur; viewStart=0; drawAll(); } };
+btnExport.onclick=doExport;
+expFormat.onchange=()=>{
+  const isWav=expFormat.value==='wav';
+  expBitrate.disabled=isWav; bitrateLabel.style.opacity=isWav?.4:1;
+};
+
+// ---------- 拖放 ----------
+let dragDepth=0;
+window.addEventListener('dragenter',e=>{ e.preventDefault(); dragDepth++; dropOverlay.style.display='flex'; });
+window.addEventListener('dragover',e=>e.preventDefault());
+window.addEventListener('dragleave',()=>{ if(--dragDepth<=0){ dragDepth=0; dropOverlay.style.display='none'; } });
+window.addEventListener('drop',e=>{
+  e.preventDefault(); dragDepth=0; dropOverlay.style.display='none';
+  if(e.dataTransfer&&e.dataTransfer.files.length) handleFiles(e.dataTransfer.files);
+});
+
+// ---------- 快捷键 ----------
+window.addEventListener('keydown',e=>{
+  const tag=(e.target.tagName||'').toLowerCase();
+  if(tag==='input'||tag==='select'||tag==='textarea'||e.target.isContentEditable) return;
+  if(!cur) return;
+  switch(e.key){
+    case ' ': e.preventDefault(); playing?pause():play(); break;
+    case 'i': case 'I': setStart(); break;
+    case 'o': case 'O': setEnd(); break;
+    case 'ArrowLeft': e.preventDefault(); seekTo(currentOffset()-(e.shiftKey?15:5)); break;
+    case 'ArrowRight': e.preventDefault(); seekTo(currentOffset()+(e.shiftKey?15:5)); break;
+    case 'Home': e.preventDefault(); seekTo(0); break;
+    case 'End': e.preventDefault(); seekTo(cur.dur); break;
+    case 'Delete': case 'Backspace': cur.sel=null; drawAll(); break;
+    case 'l': case 'L': chkLoop.checked=!chkLoop.checked; loop=chkLoop.checked; break;
+  }
+});
+
+// ---------- 时间格式 ----------
+function fmtTime(t,tenths=true){
+  t=Math.max(0,t||0);
+  const h=Math.floor(t/3600), m=Math.floor(t/60)%60, s=t%60;
+  const sec=tenths?s.toFixed(1).padStart(4,'0'):String(Math.floor(s)).padStart(2,'0');
+  return (h?h+':'+String(m).padStart(2,'0'):String(m))+':'+sec;
+}
+
+// ---------- 主循环 ----------
+function tick(){
+  if(cur){
+    if(playing){
+      const d=cur.dur, t=currentOffset();
+      const selActive=cur.sel&&(mode==='sel'||loop);
+      const endT=selActive?cur.sel.end:d;
+      if(t>=endT-0.03){
+        if(loop&&cur.sel) startSourceAt(cur.sel.start);                 // 循环
+        else if(mode==='sel'){                                          // 试听到选区尾
+          stopSource(); playing=false; pausedOffset=cur.sel.end; updatePlayBtn();
+        }
+      }
+    }
+    syncPlayhead();
+    timeLabel.textContent=fmtTime(currentOffset())+' / '+fmtTime(cur.dur);
+  }
+  requestAnimationFrame(tick);
+}
+
+// ---------- 初始化 ----------
+new ResizeObserver(()=>{ if(cur) clampView(); drawAll(); }).observe(waveWrap);
+new ResizeObserver(()=>drawAll()).observe(ovWrap);
+updateUI(); drawAll(); tick();
+</script>
+</body>
+</html>
